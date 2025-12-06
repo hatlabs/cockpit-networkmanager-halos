@@ -1,0 +1,54 @@
+#!/bin/bash
+# NetworkManager dispatcher script to set up NAT for AP mode connections
+# This is needed because Docker's iptables rules can interfere with
+# NetworkManager's built-in "shared" mode NAT functionality.
+#
+# Part of cockpit-networkmanager-halos package
+
+IFACE="$1"
+ACTION="$2"
+IPTABLES=/usr/sbin/iptables
+
+# Only handle wifi interfaces
+case "$IFACE" in
+    wlan*) ;;
+    *) exit 0 ;;
+esac
+
+# Get connection UUID from environment
+if [ -z "$CONNECTION_UUID" ]; then
+    exit 0
+fi
+
+# Check if this is an AP mode connection
+MODE=$(nmcli -t -f 802-11-wireless.mode connection show "$CONNECTION_UUID" 2>/dev/null | cut -d: -f2)
+if [ "$MODE" != "ap" ]; then
+    exit 0
+fi
+
+# Get the IP network for this interface
+IP_NET=$(ip -4 addr show "$IFACE" 2>/dev/null | grep inet | awk "{print \$2}" | head -1)
+if [ -z "$IP_NET" ]; then
+    IP_NET="10.42.0.0/24"
+else
+    IP_NET=$(echo "$IP_NET" | sed "s/\.[0-9]*\//\.0\//")
+fi
+
+case "$ACTION" in
+    up)
+        logger -t ap-nat "Setting up NAT for AP interface $IFACE ($IP_NET)"
+        $IPTABLES -t nat -C POSTROUTING -s "$IP_NET" -j MASQUERADE 2>/dev/null || \
+            $IPTABLES -t nat -A POSTROUTING -s "$IP_NET" -j MASQUERADE
+        $IPTABLES -C FORWARD -i "$IFACE" -j ACCEPT 2>/dev/null || \
+            $IPTABLES -I FORWARD -i "$IFACE" -j ACCEPT
+        $IPTABLES -C FORWARD -o "$IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+            $IPTABLES -I FORWARD -o "$IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+        ;;
+    down)
+        logger -t ap-nat "Removing NAT for AP interface $IFACE ($IP_NET)"
+        $IPTABLES -t nat -D POSTROUTING -s "$IP_NET" -j MASQUERADE 2>/dev/null || true
+        $IPTABLES -D FORWARD -i "$IFACE" -j ACCEPT 2>/dev/null || true
+        $IPTABLES -D FORWARD -o "$IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+        ;;
+esac
+exit 0
