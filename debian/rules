@@ -4,21 +4,29 @@
 #export DH_VERBOSE=1
 
 export COCKPIT_REPO := https://github.com/hatlabs/cockpit.git
-export COCKPIT_BRANCH := wifi
+export COCKPIT_BRANCH ?= wifi
 export COCKPIT_DIR := $(CURDIR)/cockpit-src
+export LOCAL_COCKPIT_SRC ?=
 
 %:
 	dh $@
 
 override_dh_auto_clean:
-	rm -rf $(COCKPIT_DIR)
+	# Don't remove cockpit-src during clean - it may be prepared by run script
 	dh_auto_clean
 
 override_dh_auto_build:
-	# Clone cockpit repository from wifi branch
-	if [ ! -d "$(COCKPIT_DIR)" ]; then \
+	# Simple approach: use cockpit-src if it exists, otherwise clone from GitHub
+	@echo "=================================================="
+	@echo "Resolving cockpit source..."
+	@echo "=================================================="
+	if [ -d "$(COCKPIT_DIR)" ]; then \
+		echo "✓ Using existing cockpit-src (prepared by run script)"; \
+	else \
+		echo "✓ Cloning from GitHub: $(COCKPIT_REPO) (branch: $(COCKPIT_BRANCH))"; \
 		git clone --depth 1 --branch $(COCKPIT_BRANCH) $(COCKPIT_REPO) $(COCKPIT_DIR); \
 	fi
+	@echo "=================================================="
 
 	# Install dependencies and build networkmanager module
 	cd $(COCKPIT_DIR) && npm install
@@ -31,6 +39,11 @@ override_dh_auto_install:
 	# Copy built networkmanager module
 	cp -r $(COCKPIT_DIR)/dist/networkmanager/* \
 		debian/cockpit-networkmanager-halos/usr/share/cockpit/networkmanager/
+
+	# Install NetworkManager dispatcher script for AP NAT
+	mkdir -p debian/cockpit-networkmanager-halos/etc/NetworkManager/dispatcher.d
+	install -m 755 files/NetworkManager/dispatcher.d/90-ap-nat \
+		debian/cockpit-networkmanager-halos/etc/NetworkManager/dispatcher.d/
 
 override_dh_auto_test:
 	# Skip tests for now (will be added in Issue #10)
